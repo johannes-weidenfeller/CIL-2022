@@ -1,4 +1,5 @@
 import torch
+import random
 import pandas as pd
 from sklearn.metrics import accuracy_score
 from simpletransformers.classification import ClassificationModel
@@ -18,7 +19,7 @@ class BertweetClassifier():
             args=model_args,
             num_labels=2
         )
-    
+
     def fit(
         self,
         X: Tuple[str],
@@ -26,7 +27,7 @@ class BertweetClassifier():
     ) -> None:
         train_df = pd.DataFrame({'text': X, 'labels': (y + 1) / 2})
         self.model.train_model(train_df, acc=accuracy_score)
-    
+
     def predict(
         self,
         X: Tuple[str]
@@ -70,7 +71,7 @@ class BaselineModel:
                     if n_tuple in self.n_tuple_counters[sentiment]:
                         self.n_tuple_counters[sentiment][n_tuple] += 1
                     else:
-                        self.n_tuple_counters[sentiment][n_tuple] = 0
+                        self.n_tuple_counters[sentiment][n_tuple] = 1
         self.scores = {-1: dict(), 1: dict()}
         for sentiment, counter in self.n_tuple_counters.items():
             for n_tuple, count in counter.items():
@@ -123,3 +124,41 @@ class BaselineModel:
         probabilities = self.predict_proba(X)
         predictions = probabilities.round() * 2 - 1
         return predictions
+
+
+class Ensemble:
+    """
+    very simple ensembling over mode of predicted labels, using varing train data order
+    """
+    def __init__(self, model_class, model_args, n_models):
+        assert n_models % 2 == 1
+        self.model_class = model_class
+        self.model_args = model_args
+        self.n_models = n_models
+
+    def fit(
+        self,
+        X: Tuple[str],
+        y: torch.Tensor
+    ) -> None:
+        seeds = random.sample(range(69), self.n_models)
+        self.clfs = {}
+        for seed in seeds:
+            data = list(zip(X, y.tolist()))
+            random.Random(seed).shuffle(data)
+            X_, y_ = zip(*data)
+            y_ = torch.Tensor(y_)
+            clf = self.model_class(self.model_args)
+            clf.fit(X_, y_)
+            self.clfs[seed] = clf
+
+    def predict(
+        self,
+        X: Tuple[str]
+    ) -> torch.Tensor:
+        preds = {}
+        for seed, clf in self.clfs.items():
+            preds[seed] = clf.predict(X)
+        preds = pd.DataFrame(preds)
+        preds = torch.Tensor(preds.mode(axis=1).loc[:, 0])
+        return preds
