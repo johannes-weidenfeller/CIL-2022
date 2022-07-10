@@ -1,19 +1,20 @@
 import random
 import torch
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 from emoji import demojize
 from nltk.tokenize import TweetTokenizer
+from scipy.special import softmax
+from hyperopt import hp, fmin, tpe
 
 from typing import Tuple, Dict, Any, List, Union
 
-from models import BertweetClassifier
-
 
 def get_data(
-    full: bool,
-    seed: int,
-    test_size: float
+        full: bool,
+        seed: int,
+        test_size: float
 ) -> Tuple[Tuple[str], torch.Tensor, Tuple[str], torch.Tensor]:
     """
     Loads training and testing data
@@ -46,8 +47,8 @@ def get_data(
 
 
 def calc_clf_acc(
-    true: torch.Tensor,
-    predicted: torch.Tensor
+        true: torch.Tensor,
+        predicted: torch.Tensor
 ) -> float:
     """
     Calculates the classification accuracy.
@@ -60,8 +61,8 @@ def calc_clf_acc(
 
 
 def predict_holdout(
-    clf: Any,
-    out_path: str
+        clf: Any,
+        out_path: str
 ) -> None:
     """
     Predicts on the holdout "test_data.txt" using provided classifier.
@@ -80,12 +81,12 @@ def predict_holdout(
 
 
 def pipeline(
-    full: bool,
-    seed: int,
-    test_size: float,
-    model_class: Any,
-    model_args: Dict[str, Any],
-    out_path: str=None
+        full: bool,
+        seed: int,
+        test_size: float,
+        model_class: Any,
+        model_args: Dict[str, Any],
+        out_path: str=None
 ) -> None:
     """
     Loads data, fits and evaluates the model and predicts on holdout set.
@@ -115,11 +116,11 @@ def pipeline(
 
 
 def sensitivity_analysis(
-    model_class: Any,
-    config: Dict,
-    param_name: str,
-    param_values: List[Union[int, float]],
-    n: int
+        model_class: Any,
+        config: Dict,
+        param_name: str,
+        param_values: List[Union[int, float]],
+        n: int
 ) -> None:
     """
     inspects the changes of accuracy in varying parameter value
@@ -144,7 +145,7 @@ def sensitivity_analysis(
 
 
 def plot_sensitivity_analysis_results(
-    sensitivity_params: Dict[str, List[Union[float, int]]]
+        sensitivity_params: Dict[str, List[Union[float, int]]]
 ) -> None:
     """
     plots sensitivities of accuracies to parameter value changes on log-plot.
@@ -218,3 +219,195 @@ def normalizeTweets(tweets):
     """ see https://github.com/VinAIResearch/BERTweet/blob/master/TweetNormalizer.py """
     tokenizer = TweetTokenizer()
     return tuple(normalizeTweet(tokenizer, t) for t in tweets)
+
+
+def get_confidence_scores(
+        model: Any,
+        X: Tuple[str],
+        y: torch.Tensor
+) -> np.array:
+    """
+    returns maximum of predicted class probabilities
+
+    :param model: classifier
+    :param X: tweets
+    :param y: labels
+    """
+    df = pd.DataFrame({'text': X, 'labels': (y + 1) / 2})
+    _, outputs, _ = model.model.eval_model(df)
+    probs = softmax(outputs, axis=1)
+    scores = np.max(outputs, axis=1)
+    return scores
+
+
+def build_curriculum(
+        X: Tuple[str],
+        y: torch.Tensor,
+        scores: np.array
+) -> Tuple[Tuple[str], torch.Tensor]:
+    """
+    return training data sorted by decreasing confidence scores,
+    while roughly preserving class distribution in any interval
+
+    :param X: tweets
+    :param y: labels
+    :parm scores: confidence scores
+    """
+    bundle = zip(X, y.tolist(), scores)
+    X, y, _ = list(zip(*sorted(bundle, key=lambda t: t[2], reverse=True)))
+    X_pos, y_pos = list(zip(*filter(lambda t: t[1] == 1, zip(X, y))))
+    X_neg, y_neg = list(zip(*filter(lambda t: t[1] == -1, zip(X, y))))
+    n = len(y)
+    true_r = len(y_pos) / n
+    X, y = [], []
+    pos_count, neg_count = 0, 0
+    running_r = 0
+    for i in range(n):
+        if running_r < true_r:
+            X.append(X_pos[pos_count])
+            y.append(y_pos[pos_count])
+            pos_count += 1
+        else:
+            X.append(X_neg[neg_count])
+            y.append(y_neg[neg_count])
+            neg_count += 1
+        running_r = pos_count / (pos_count + neg_count)
+    y = torch.Tensor(y)
+    return X, y
+
+
+def drop_duplicates(
+        X: Tuple[str],
+        y: torch.Tensor
+) -> Tuple[Tuple[str], torch.Tensor]:
+    """
+    removes duplicate tweets
+
+    :param X: tweets
+    :param y: labels
+    """
+    X, y = pd.Series(X), y.numpy()
+    idx = ~X.duplicated()
+    X, y = X[idx].values.tolist(), torch.Tensor(y[idx].tolist())
+    return X, y
+
+
+def get_smileys_subset(
+        X: Tuple[str],
+        y: torch.Tensor
+) -> Tuple[Tuple[str], torch.Tensor]:
+    """
+    try to select all tweets which had smileys ":))" or ":(("
+
+    :param X: tweets
+    :param y: labels
+    """
+    X_smileys, y_smileys = [], []
+    replacees = ['<user>', '<url>', 'live at <url>', 'via <user>', 'rt <user>']
+    replacees = [f'( {replacee}' for replacee in replacees]
+    for tweet, label in zip(X, y):
+        for replacee in replacees:
+            tweet = tweet.replace(replacee, '')
+        non_duplicate_brackets = ') )' not in tweet and '( (' not in tweet
+        if non_duplicate_brackets:
+            has_only_sad_smiley = '( ' in tweet and ' )' not in tweet
+            has_only_happy_smiley = '( ' not in tweet and ' )' in tweet
+            if has_only_sad_smiley or has_only_happy_smiley:
+                X_smileys.append(tweet)
+                y_smileys.append(label)
+    return X_smileys, torch.Tensor(y_smileys)
+
+
+def smileys_predict(
+        X: Tuple[str]
+) -> torch.Tensor:
+    """
+    predict positive (negative) for tweets with assumed initial smiley ":))" (":((")
+
+    :param X: tweets
+    """
+    preds = []
+    for x in X:
+        if '( ' in x:
+            preds.append(-1)
+        elif ' )' in x:
+            preds.append(1)
+    return torch.Tensor(preds)
+
+
+def update_preds(
+        X: Tuple[str],
+        preds: torch.Tensor
+) -> torch.Tensor:
+    """
+    overrules model prediction by simple heuristic where applicable
+
+    :param X: tweets
+    :param preds: predictions
+    """
+    preds_updated = []
+    replacees = ['<user>', '<url>', 'live at <url>', 'via <user>', 'rt <user>']
+    replacees = [f'( {replacee}' for replacee in replacees]
+    for tweet, pred in zip(X, preds):
+        for replacee in replacees:
+            tweet = tweet.replace(replacee, '')
+        if ') )' not in tweet and '( (' not in tweet:
+            if '( ' in tweet and ' )' not in tweet:
+                preds_updated.append(-1)
+            elif '( ' not in tweet and ' )' in tweet:
+                preds_updated.append(1)
+            else:
+                preds_updated.append(pred)
+        else:
+            preds_updated.append(pred)
+    return torch.Tensor(preds_updated)
+
+
+
+
+def optimize(
+        model_class: Any,
+        default_model_args: Dict[str, Any],
+        X: Tuple[str],
+        y: torch.Tensor,
+        space: Dict[str, Any],
+        val_size: float,
+        max_evals: int
+) -> Dict[str, Any]:
+    """
+    optimize hyperparameters via hyperopt
+
+    :param model_class: model class to fit
+    :param default_model_args: model parameters
+    :param X: tweets
+    :param y: labels
+    :param space: dictionary of hyperparameters
+    :param val_size: share of data to use for validation
+    :param max_evals: maximum number of runs
+    """
+
+    split_idx = int((1 - val_size) * len(X))
+    X_train, y_train = X[:split_idx], y[:split_idx]
+    X_val, y_val = X[split_idx:], y[split_idx:]
+
+    def objective(
+            params: Dict[str, Any]
+    ) -> float:
+        """ objective function to minimize """
+        model_args = {
+            **default_model_args,
+            'learning_rate': params['learning_rate'],
+            'batch_size': int(params['batch_size'])
+        }
+
+        clf = model_class(model_args)
+        clf.fit(X_train, y_train)
+
+        val_preds = clf.predict(X_val)
+        val_acc = calc_clf_acc(y_val, val_preds)
+        print(f'{val_acc * 100:.4f}% validation acc for params {params}')
+        return -val_acc
+
+    best_params = fmin(objective, space, algo=tpe.suggest, max_evals=max_evals)
+
+    return best_params

@@ -3,6 +3,9 @@ import random
 import pandas as pd
 from sklearn.metrics import accuracy_score
 from simpletransformers.classification import ClassificationModel
+import tensorflow as tf
+from transformers import AutoTokenizer
+from transformers import TFAutoModelForSequenceClassification as TFModel
 
 from typing import Dict, Any, Tuple, List
 
@@ -10,8 +13,8 @@ from typing import Dict, Any, Tuple, List
 class BertweetClassifier():
     """ Finetuning BERTweet-base via simpletransformers """
     def __init__(
-        self,
-        model_args: Dict[str, Any]
+            self,
+            model_args: Dict[str, Any]
     ) -> None:
         self.model = ClassificationModel(
             model_type='bertweet',
@@ -21,24 +24,24 @@ class BertweetClassifier():
         )
 
     def fit(
-        self,
-        X: Tuple[str],
-        y: torch.Tensor
+            self,
+            X: Tuple[str],
+            y: torch.Tensor
     ) -> None:
         train_df = pd.DataFrame({'text': X, 'labels': (y + 1) / 2})
         self.model.train_model(train_df, acc=accuracy_score)
 
     def predict(
-        self,
-        X: Tuple[str]
+            self,
+            X: Tuple[str]
     ) -> torch.Tensor:
         return 2 * torch.Tensor(self.model.predict(X)[0]) - 1
 
 
 class BaselineModel:
     def __init__(
-        self,
-        model_args: Dict[str, Any]
+            self,
+            model_args: Dict[str, Any]
     ) -> None:
         """
         :param n: the length of the word tuple
@@ -48,9 +51,9 @@ class BaselineModel:
         self.p = model_args['p']
 
     def fit(
-        self,
-        X: List[str],
-        y: torch.Tensor
+            self,
+            X: List[str],
+            y: torch.Tensor
     ) -> None:
         """
         Computes an occurrence counter for each consecutive n-tuple of words
@@ -78,8 +81,8 @@ class BaselineModel:
                 self.scores[sentiment][n_tuple] = count ** self.p
 
     def predict_proba(
-        self,
-        X: List[str],
+            self,
+            X: List[str],
     ) -> torch.Tensor:
         """
         Creates a score for each tweet and each sentiment as the sum of scores for each
@@ -112,8 +115,8 @@ class BaselineModel:
         return torch.Tensor(pos_probabilities)
 
     def predict(
-        self,
-        X: List[str]
+            self,
+            X: List[str]
     ) -> torch.Tensor:
         """
         predicts labels
@@ -137,9 +140,9 @@ class Ensemble:
         self.n_models = n_models
 
     def fit(
-        self,
-        X: Tuple[str],
-        y: torch.Tensor
+            self,
+            X: Tuple[str],
+            y: torch.Tensor
     ) -> None:
         seeds = random.sample(range(69), self.n_models)
         self.clfs = {}
@@ -153,8 +156,8 @@ class Ensemble:
             self.clfs[seed] = clf
 
     def predict(
-        self,
-        X: Tuple[str]
+            self,
+            X: Tuple[str]
     ) -> torch.Tensor:
         preds = {}
         for seed, clf in self.clfs.items():
@@ -162,3 +165,48 @@ class Ensemble:
         preds = pd.DataFrame(preds)
         preds = torch.Tensor(preds.mode(axis=1).loc[:, 0])
         return preds
+
+
+class TFBertweetClassifier():
+    """ finetuning pretrained models via tensorflow """
+    def __init__(
+            self,
+            model_args: Dict[str, Any]
+    ) -> None:
+        self.model_name = model_args['model_name']
+        self.epochs = model_args['epochs']
+        self.batch_size = model_args['batch_size']
+        self.learning_rate = model_args['learning_rate']
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+
+    def fit(
+            self,
+            X: Tuple[str],
+            y: torch.Tensor
+    ) -> None:
+        inputs = self.tokenizer(X, padding=True, truncation=True, return_tensors='tf')
+        dataset = tf.data.Dataset.from_tensor_slices((dict(inputs), (y + 1) / 2))
+        ds = dataset.batch(self.batch_size).prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
+        self.model = TFModel.from_pretrained(self.model_name, num_labels=2)
+        self.model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=self.learning_rate),
+            loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+            metrics=[tf.keras.metrics.SparseCategoricalAccuracy()])
+        self.history = self.model.fit(ds, epochs=self.epochs)
+
+    def predict_proba(
+            self,
+            X: Tuple[str]
+    ) -> tf.Tensor:
+        inputs = self.tokenizer(X, padding=True, truncation=True, return_tensors='tf')
+        dataset = tf.data.Dataset.from_tensor_slices((dict(inputs),)).batch(self.batch_size)
+        probs = tf.nn.softmax(self.model.predict(dataset)['logits'])
+        return probs
+
+    def predict(
+            self,
+            X: Tuple[str]
+    ) -> torch.Tensor:
+        probs = self.predict_proba(X)
+        preds = tf.argmax(probs, axis=1) * 2 - 1
+        return torch.Tensor(preds.numpy())
