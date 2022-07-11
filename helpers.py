@@ -26,9 +26,9 @@ def get_data(
     """
     prefix = 'twitter-datasets/train_'
     suffix = '_full' if full else ''
-    with open(f'{prefix}neg{suffix}.txt', 'r') as f:
+    with open(f'{prefix}neg{suffix}.txt', 'r', encoding='utf8') as f:
         neg = f.read().split('\n')[:-1]
-    with open(f'{prefix}pos{suffix}.txt', 'r') as f:
+    with open(f'{prefix}pos{suffix}.txt', 'r', encoding='utf8') as f:
         pos = f.read().split('\n')[:-1]
 
     data = list(zip(neg, [-1] * len(neg))) + list(zip(pos, [1] * len(pos)))
@@ -38,8 +38,16 @@ def get_data(
     train = data[:split_idx]
     test = data[split_idx:]
 
-    X_train, y_train = list(zip(*train))
-    X_test, y_test = list(zip(*test))
+    if train:
+        X_train, y_train = list(zip(*train))
+    else:
+        X_train, y_train = [], []
+
+    if test:
+        X_test, y_test = list(zip(*test))
+    else:
+        X_test, y_test = [], []
+
     y_train = torch.Tensor(y_train)
     y_test = torch.Tensor(y_test)
 
@@ -99,17 +107,18 @@ def pipeline(
 
     """
     X_train, y_train, X_test, y_test = get_data(full, seed, test_size)
-
     clf = model_class(model_args)
-    clf.fit(X_train, y_train)
 
-    y_train_hat = clf.predict(X_train)
-    y_test_hat = clf.predict(X_test)
+    if X_train:
+        clf.fit(X_train, y_train)
+        y_train_hat = clf.predict(X_train)
+        train_acc = calc_clf_acc(y_train, y_train_hat)
+        print(f'Training accuracy: {train_acc * 100:.2f}%')
 
-    train_acc = calc_clf_acc(y_train, y_train_hat)
-    test_acc = calc_clf_acc(y_test, y_test_hat)
-    print(f'Training accuracy: {train_acc * 100:.2f}%')
-    print(f'Testing accuracy: {test_acc * 100:.2f}%')
+    if X_test:
+        y_test_hat = clf.predict(X_test)
+        test_acc = calc_clf_acc(y_test, y_test_hat)
+        print(f'Testing accuracy: {test_acc * 100:.2f}%')
 
     if out_path is not None:
         predict_holdout(clf, out_path)

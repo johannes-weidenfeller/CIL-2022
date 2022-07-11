@@ -10,15 +10,20 @@ from transformers import TFAutoModelForSequenceClassification as TFModel
 from typing import Dict, Any, Tuple, List
 
 
-class BertweetClassifier():
+class BertweetClassifier:
     """ Finetuning BERTweet-base via simpletransformers """
     def __init__(
             self,
-            model_args: Dict[str, Any]
+            model_args: Dict[str, Any],
+            model_base='vinai/bertweet-base'
     ) -> None:
+        checkpoint = model_args['checkpoint'] if 'checkpoint' in model_args else None
+        name = checkpoint or model_base
         self.model = ClassificationModel(
             model_type='bertweet',
-            model_name='vinai/bertweet-base',
+            model_name=name,
+            tokenizer_name=model_base,
+            tokenizer_type=AutoTokenizer.from_pretrained(model_base),
             args=model_args,
             num_labels=2
         )
@@ -36,6 +41,11 @@ class BertweetClassifier():
             X: Tuple[str]
     ) -> torch.Tensor:
         return 2 * torch.Tensor(self.model.predict(X)[0]) - 1
+
+
+class BertweetLargeClassifier(BertweetClassifier):
+    def __init__(self, model_args):
+        super().__init__(model_args, 'vinai/bertweet-large')
 
 
 class BaselineModel:

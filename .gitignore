@@ -1,1 +1,7 @@
 data
+twitter-datasets
+cache_dir
+outputs
+runs
+*.xml
+*.csv
