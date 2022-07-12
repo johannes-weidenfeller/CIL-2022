@@ -5,6 +5,7 @@ from sklearn.metrics import accuracy_score
 from simpletransformers.classification import ClassificationModel
 import tensorflow as tf
 from transformers import AutoTokenizer
+from transformers import AdamWeightDecay
 from transformers import TFAutoModelForSequenceClassification as TFModel
 
 from typing import Dict, Any, Tuple, List
@@ -177,6 +178,38 @@ class Ensemble:
         return preds
 
 
+class LearningRateWarmupCooldown(tf.keras.callbacks.Callback):
+    def __init__(
+            self,
+            model: TFModel,
+            peak_lr: float,
+            warmup_ratio: float,
+            n_training_steps: int,
+            initial_lr: float=0,
+            final_lr: float=0
+    ) -> None:
+        super(LearningRateWarmupCooldown, self).__init__()
+        self.model = model
+        self.peak_lr = peak_lr
+        self.warmup_ratio = warmup_ratio
+        self.n_training_steps = n_training_steps
+        self.peak_step = warmup_ratio * n_training_steps
+        self.initial_lr = initial_lr
+        self.final_lr = final_lr
+
+    def on_train_begin(self, logs=None):
+        tf.keras.backend.set_value(self.model.optimizer.lr, self.initial_lr)
+
+    def on_train_batch_end(self, batch, logs=None):
+        if batch < self.peak_step:
+            delta = batch / self.peak_step
+            lr = delta * self.peak_lr + (1 - delta) * self.initial_lr
+        else:
+            delta = (batch - self.peak_step) / (self.n_training_steps - self.peak_step)
+            lr = delta * self.final_lr + (1 - delta) * self.peak_lr
+        tf.keras.backend.set_value(self.model.optimizer.lr, lr)
+
+
 class TFBertweetClassifier():
     """ finetuning pretrained models via tensorflow """
     def __init__(
@@ -187,6 +220,9 @@ class TFBertweetClassifier():
         self.epochs = model_args['epochs']
         self.batch_size = model_args['batch_size']
         self.learning_rate = model_args['learning_rate']
+        self.weight_decay = model_args['weight_decay']
+        self.dropout = model_args['dropout']
+        self.warmup_ratio = model_args['warmup_ratio']
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
 
     def fit(
@@ -197,12 +233,28 @@ class TFBertweetClassifier():
         inputs = self.tokenizer(X, padding=True, truncation=True, return_tensors='tf')
         dataset = tf.data.Dataset.from_tensor_slices((dict(inputs), (y + 1) / 2))
         ds = dataset.batch(self.batch_size).prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
-        self.model = TFModel.from_pretrained(self.model_name, num_labels=2)
+        self.model = TFModel.from_pretrained(
+            self.model_name,
+            num_labels=2,
+            hidden_dropout_prob=self.dropout,
+            attention_probs_dropout_prob=self.dropout
+        )
         self.model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=self.learning_rate),
+            optimizer=AdamWeightDecay(
+                learning_rate=self.learning_rate,
+                weight_decay_rate=self.weight_decay
+            ),
             loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
-            metrics=[tf.keras.metrics.SparseCategoricalAccuracy()])
-        self.history = self.model.fit(ds, epochs=self.epochs)
+            metrics=[tf.keras.metrics.SparseCategoricalAccuracy()]
+        )
+        n_training_steps = len(X) // self.batch_size * self.epochs + 1
+        lr_scheduler = LearningRateWarmupCooldown(
+            model=self.model,
+            peak_lr=self.learning_rate,
+            warmup_ratio=self.warmup_ratio,
+            n_training_steps=n_training_steps
+        )
+        self.history = self.model.fit(ds, epochs=self.epochs, callbacks=[lr_scheduler])
 
     def predict_proba(
             self,
