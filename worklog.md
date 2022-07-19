@@ -58,3 +58,22 @@
   - re-run experiments and sensitivity analysis using larger training sizes, to be able to make more confident conclusions.
   - pick a handful of hyperparameters deemed to be of great importance and see what optimization with hyperopt brings.
   - improve on curriculum learning approach.
+
+### 19.07.2022 / Michael
+- **Refactoring**: Code now running on euler, refactoring and trying to write somewhat more clean code.
+- **Experiments**: Ran various experiments, grouped into:
+  - Preprocessing: no duplicates, smiley reconstruction, vinai preprocessing
+  - Subset: determine subsets to either use exclusively or augment training data with, e.g. train with the hardest/easiest x% duplicated, train with only hard/easy examples, etc.
+  - Curriculum: order training data by hardness measures, w/ or /wo some reordering due to class imbalances & too strict of ordering
+  - Ensembling: various inference techniques / variance introduction methods (i.e. changing order of training data and weight initialization across models in ensemble)
+  - Hyperparameter: some plays with smaller/larger batch size/learning rate
+ 
+  Experiments were all run on the same `25k` training samples (`1%` of the data). See `euler/full_results_1_pct.csv` for results (sorted by decresing `test_acc`).
+ - **Exploratory Data Analysis**: Mainly looking at frequencies of certain properties between classes and then ranking them by class bias, e.g.
+   - most common tweets
+   - tweet lengths distribution
+   - most common tokens
+   - hashtag analysis
+   - special token overview
+   - single-character tokens
+ - **New Baseline**: Using gradient boosting on top of embeddings from transformers via `sentence-transformers` and `catboost`. Not yet thoroughly explored, but around `2%` worse w.r.t test set accuracy than the default finetuned Bertweet on around `10k` examples. 
