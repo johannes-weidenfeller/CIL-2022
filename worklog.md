@@ -69,11 +69,15 @@
   - Hyperparameter: some plays with smaller/larger batch size/learning rate
  
   Experiments were all run on the same `25k` training samples (`1%` of the data). See `euler/full_results_1_pct.csv` for results (sorted by decresing `test_acc`).
- - **Exploratory Data Analysis**: Mainly looking at frequencies of certain properties between classes and then ranking them by class bias, e.g.
-   - most common tweets
-   - tweet lengths distribution
-   - most common tokens
-   - hashtag analysis
-   - special token overview
-   - single-character tokens
- - **New Baseline**: Using gradient boosting on top of embeddings from transformers via `sentence-transformers` and `catboost`. Not yet thoroughly explored, but around `2%` worse w.r.t test set accuracy than the default finetuned Bertweet on around `10k` examples. 
+- **Exploratory Data Analysis**: Mainly looking at frequencies of certain properties between classes and then ranking them by class bias, e.g.
+  - most common tweets
+  - tweet lengths distribution
+  - most common tokens
+  - hashtag analysis
+  - special token overview
+  - single-character tokens
+- **New Baseline**: Using gradient boosting on top of embeddings from transformers via `sentence-transformers` and `catboost`. Not yet thoroughly explored, but around `2%` worse w.r.t test set accuracy than the default finetuned Bertweet on around `10k` examples.
+- **Next Up Ideas**:
+  - Validate results either by re-running on different data / with different seed / more data
+  - Expand on / combine the promising ones and validate on larger training sets (e.g. `10%`)
+  - Re-Iterate
