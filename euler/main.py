@@ -11,7 +11,7 @@ import pandas as pd
 
 from typing import Dict, Any, Tuple, List
 
-from helpers import get_data, evaluate, predict_holdout
+from helpers import get_data, evaluate, predict_holdout, run_best
 from models import BertweetClassifier, TokenTupleFrequenciesClassifier, EmbeddingsBoostingClassifier
 from experiments import run_experiments, EXPERIMENTS
 from eda import run_eda
@@ -55,10 +55,10 @@ TOKEN_TUPLE_FREQUENCIES_CLASSIFIER_CONFIG = {
 
 
 ENSEMBLING_SEARCH_PERFORMANCE_THRESHOLD = 0.9
-ENSEMBLING_SEARCH_N_MODELS = 3
+ENSEMBLING_SEARCH_N_MODELS = 4
 ENSEMBLING_SEARCH_INFERENCE_STYLE = 'prob_mean_arith'
-ENSEMBLING_SEARCH_QUANTILE = 0.25
-ENSEMBLING_SEARCH_SUBSET_SIZE = 2
+ENSEMBLING_SEARCH_QUANTILE = 0.1
+ENSEMBLING_SEARCH_SUBSET_SIZE = 3
 
 
 def main(
@@ -94,8 +94,17 @@ def main(
             out_path=EXPERIMENTS_OUT_PATH
         )
     if run_for_submission:
-        pass
+        run_best(
+            seed=SEED,
+            train_size=190000,
+            test_size=10000,
+            model_class=DEFAULT_CLASSIFIER,
+            model_args=DEFAULT_MODEL_ARGS,
+            out_path='example_submission'
+        )
 
 
 if __name__ == '__main__':
-    main(run_ensembling_candidate_search=True)
+    main(run_for_submission=True)
+
+
