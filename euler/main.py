@@ -7,16 +7,22 @@ warnings.simplefilter("ignore", category=UserWarning)
 logging.set_verbosity_error()
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
+import pandas as pd
+
+from typing import Dict, Any, Tuple, List
+
 from helpers import get_data, evaluate, predict_holdout
 from models import BertweetClassifier, TokenTupleFrequenciesClassifier, EmbeddingsBoostingClassifier
 from experiments import run_experiments, EXPERIMENTS
 from eda import run_eda
+from ensembling import ensembling_candidate_search, rank_ensembling_candidates
 
 
 SEED = 42
 EXPERIMENTAL_TRAIN_SIZE = 25000
 DEFAULT_TEST_SIZE = 10000
-
+EXPERIMENTS_OUT_PATH = 'experiment_results'
+EVAL_ON_TRAIN = False
 DEFAULT_CLASSIFIER = BertweetClassifier
 DEFAULT_MODEL_ARGS = {
     'manual_seed': 69,
@@ -48,14 +54,22 @@ TOKEN_TUPLE_FREQUENCIES_CLASSIFIER_CONFIG = {
 }
 
 
+ENSEMBLING_SEARCH_PERFORMANCE_THRESHOLD = 0.9
+ENSEMBLING_SEARCH_N_MODELS = 3
+ENSEMBLING_SEARCH_INFERENCE_STYLE = 'prob_mean_arith'
+ENSEMBLING_SEARCH_QUANTILE = 0.25
+ENSEMBLING_SEARCH_SUBSET_SIZE = 2
+
+
 def main(
     run_exploratory_data_analysis=False,
-    run_experiments=False,
+    run_experiments_suite=False,
+    run_ensembling_candidate_search=False,
     run_for_submission=False
 ) -> None:
     if run_exploratory_data_analysis:
         run_eda()
-    if run_experiments:
+    if run_experiments_suite:
         experiments_results = run_experiments(
             experiments=EXPERIMENTS,
             model_class=DEFAULT_CLASSIFIER,
@@ -63,12 +77,25 @@ def main(
             seed=SEED,
             train_size=EXPERIMENTAL_TRAIN_SIZE,
             test_size=DEFAULT_TEST_SIZE,
-            out_path='experiments_results.csv'
+            eval_on_train=EVAL_ON_TRAIN,
+            out_path=EXPERIMENTS_OUT_PATH
         )
-
+    if run_ensembling_candidate_search:
+        candidate_search_results = ensembling_candidate_search(
+            out_path=EXPERIMENTS_OUT_PATH,
+            performance_threshold=ENSEMBLING_SEARCH_PERFORMANCE_THRESHOLD,
+            n_models=ENSEMBLING_SEARCH_N_MODELS,
+            inference_style=ENSEMBLING_SEARCH_INFERENCE_STYLE
+        )
+        best_candidates = rank_ensembling_candidates(
+            candidate_search_results=candidate_search_results,
+            pct=ENSEMBLING_SEARCH_QUANTILE,
+            subset_size=ENSEMBLING_SEARCH_SUBSET_SIZE,
+            out_path=EXPERIMENTS_OUT_PATH
+        )
     if run_for_submission:
         pass
 
 
 if __name__ == '__main__':
-    main()
+    main(run_ensembling_candidate_search=True)

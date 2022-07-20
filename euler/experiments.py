@@ -1,5 +1,6 @@
 import shutil
 import gc
+import os
 import pandas as pd
 import torch
 from copy import deepcopy
@@ -28,27 +29,37 @@ def run_experiments(
     seed: int,
     train_size: int,
     test_size: int,
+    eval_on_train: bool=False,
     out_path: str=None
 ) -> pd.DataFrame:
     """
     runs a series of experiments on the same training and testing data
     """
+    if out_path is not None:
+        if not os.path.exists(f'{out_path}/probs'):
+            os.makedirs(f'{out_path}/probs')
     X_train, y_train, X_test, y_test = get_data(seed, train_size, test_size)
+    torch.save(y_test, f'{out_path}/y_test.pt')
+    with open (f'{out_path}/X_test.txt', 'w') as f:
+        f.write('\n'.join(X_test))
     experiment_names = list(experiments.keys())
     metrics = ['acc', 'mcc', 'tp', 'tn', 'fp', 'fn', 'auroc', 'auprc']
-    columns = [f'train_{mn}' for mn in metrics] + [f'test_{mn}' for mn in metrics]
+    columns = [f'test_{mn}' for mn in metrics]
+    if eval_on_train:
+        columns = [f'train_{mn}' for mn in metrics] + columns
     results = pd.DataFrame(index=experiment_names, columns=columns)
     for experiment_name, experiment_callable in experiments.items():
         trained_model, X_train_, y_train_, X_test_ = experiment_callable(
             model_class, deepcopy(default_config), deepcopy(X_train), y_train.clone(), deepcopy(X_test)
         )
-        res = evaluate(trained_model, X_train_, y_train_, X_test_, y_test)
+        probs_out_path = None if out_path is None else f'{out_path}/probs/{experiment_name}.pt'
+        res = evaluate(trained_model, X_train_, y_train_, X_test_, y_test, eval_on_train, probs_out_path)
         for metric_name in metrics:
-            results.loc[experiment_name, f'train_{metric_name}'] = res.loc['train', metric_name]
-            results.loc[experiment_name, f'test_{metric_name}'] = res.loc['test', metric_name]
+            for traintest in res.index:
+                results.loc[experiment_name, f'{traintest}_{metric_name}'] = res.loc[traintest, metric_name]
         results.sort_values(by='test_acc', inplace=True, ascending=False)
         if out_path is not None:
-            results.to_csv(out_path)
+            results.to_csv(f'{out_path}/results.csv')
         gc.collect()
         torch.cuda.empty_cache()
         shutil.rmtree('outputs')
@@ -205,7 +216,7 @@ def with_subset_duplicated_or_separate(
             '["mispredictions", "correct_predictions", "lowest_errors", "highest_errors"], '
             f'but got {subset_type} instead.'
         )
-    
+
     if subset_type == 'mispredictions':
         X_subset, y_subset = get_mispredictions(X_train, y_train, preds)
     elif subset_type == 'correct_predictions':
@@ -214,7 +225,7 @@ def with_subset_duplicated_or_separate(
         X_subset, y_subset = get_lowest(X_train, y_train, errors, pct)
     elif subset_type == 'highest_errors':
         X_subset, y_subset = get_highest(X_train, y_train, errors, pct)
-    
+
     if duplicate_or_separate == 'duplicate':
         X_train_, y_train_ = duplicate_subset(
             X_train, y_train, X_subset, y_subset, mixin_method
@@ -459,7 +470,7 @@ def get_hyperparam_experiments(
     """
     hyperparam_configs = {
         'smaller-batches-smaller-learning-rate': {
-            'train_batch_size': 12, 'learning_rate': 1e-5   
+            'train_batch_size': 12, 'learning_rate': 1e-5
         },
         'smaller-batches-larger-learning-rate': {
             'train_batch_size': 12, 'learning_rate': 4e-5
@@ -481,9 +492,9 @@ def get_hyperparam_experiments(
 
 
 EXPERIMENTS = {
-    #**get_preprocessing_experiments(),
-    #**get_subset_experiments(),
-    #**get_curriculum_experiments(),
+    **get_preprocessing_experiments(),
+    **get_subset_experiments(),
+    **get_curriculum_experiments(),
     #**get_ensembling_experiments(),
-    #**get_hyperparam_experiments(),
+    **get_hyperparam_experiments(),
 }

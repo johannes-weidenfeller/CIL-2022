@@ -1,9 +1,14 @@
+import tqdm
 import pandas as pd
 import torch
 import random
 import numpy as np
+from scipy.special import softmax
+import itertools
 
 from typing import Tuple, Dict
+
+import helpers
 
 
 def shuffle(
@@ -13,7 +18,7 @@ def shuffle(
 ) -> Tuple[Tuple[str], torch.Tensor]:
     """
     shuffle examples based on seed
-    
+
     :param X: tweets
     :param y: labels
     :param seed: seed for RNG
@@ -55,7 +60,7 @@ def ensemble_via_geometric_mean_odds(
 ) -> np.array:
     """
     predic labels corresponding to softmaxed geometric mean of odds
-    
+
     :param probabilities: a dataframe of predicted probabilities for positive labels
     """
     n = probabilities.shape[1]
@@ -171,3 +176,84 @@ class Ensemble:
         X: Tuple[str]
     ) -> torch.Tensor:
         return 2 * self.predict_proba(X).round() - 1
+
+
+def ensembling_candidate_search(
+    out_path: str,
+    performance_threshold: float,
+    n_models: int,
+    inference_style: str
+) -> pd.DataFrame:
+    """
+    tries ensembling all combinations of n_models on all models exceeding performance_threshold
+
+    :param out_path: path of experiment results, containing test set and probabilities
+    :param performance_threshold: consider only models exceeding this threshold
+    :param n_models: number of models per ensemble
+    :param inference_style: how to ensemble predictions
+    """
+    results = pd.read_csv(f'{out_path}/results.csv', index_col=0)
+    candidates = results[results.test_acc > performance_threshold].index.tolist()
+    with open(f'{out_path}/X_test.txt', 'r') as f:
+        X_test = tuple([f.read().split('\n')])
+    y_test = torch.load(f'{out_path}/y_test.pt')
+    candidates = results[results.test_acc > performance_threshold].index.tolist()
+    probs = {
+        candidate: torch.load(f'{out_path}/probs/{candidate}.pt') for candidate in candidates
+    }
+    combinations = list(itertools.combinations(candidates, n_models))
+    metrics = ['acc', 'mcc', 'tp', 'tn', 'fp', 'fn', 'auroc', 'auprc']
+    candidate_search_results = pd.DataFrame(
+        index=range(len(combinations)),
+        columns=[f'model {i}' for i in range(1, n_models + 1)] + metrics
+    )
+    for i, combination in tqdm.tqdm(enumerate(combinations), total=len(combinations)):
+        pos_probs = pd.DataFrame(
+            {model_id: probs[model_id].numpy()[:, 1] for model_id in combination}
+        )
+        ensembled_probs = ensemble_probs(pos_probs, inference_style)
+        test_probs = torch.Tensor(np.stack((1 - ensembled_probs, ensembled_probs), axis=1))
+        metrics_res = helpers.calc_metrics(y_test, test_probs)
+        for j in range(n_models):
+            candidate_search_results.loc[i, f'model {j + 1}'] = combination[j]
+        for metric in metrics:
+            candidate_search_results.loc[i, metric] = metrics_res[metric]
+    candidate_search_results.sort_values(by='acc', ascending=False, inplace=True)
+    candidate_search_results.to_csv(f'{out_path}/candidate_search_results-{inference_style}-{n_models}.csv')
+    return candidate_search_results
+
+
+def rank_ensembling_candidates(
+    candidate_search_results: pd.DataFrame,
+    pct: float,
+    subset_size: int,
+    out_path: str
+) -> pd.DataFrame:
+    """
+    ranks subsets of models by frequency in top qantile
+
+    :param candidate_search_result: result by ensembling_candidate_search()
+    :param pct: indicating which share of best models to consider
+    :param subset_size: number of models to consider together
+    :param out_path: where to save results to
+    """
+    df = candidate_search_results.sort_values(by='acc', ascending=False)
+    n = df.shape[0]
+    model_cols = [c for c in df.columns if 'model ' in c]
+    ensembling_size = len(model_cols)
+    top_models = df[:int(n * pct)][model_cols]
+    ensembles = set(top_models.to_numpy().flatten())
+    ensemble_subsets = list(itertools.combinations(ensembles, subset_size))
+    ensemble_subsets = [tuple(sorted(ss)) for ss in ensemble_subsets]
+    frequencies = {ensemble_subset: 0 for ensemble_subset in ensemble_subsets}
+    for i, models in top_models.iterrows():
+        for subset in list(itertools.combinations(models.tolist(), subset_size)):
+            frequencies[tuple(sorted(subset))] += 1
+    frequencies = sorted(frequencies.items(), key=lambda t: t[1], reverse=True)
+    best_subsets = [modelnames for modelnames, _ in frequencies]
+    counts = [count for _, count in frequencies]
+    results = pd.DataFrame({'count': counts})
+    results[[f'model {i}' for i in range(1, subset_size + 1)]] = best_subsets
+    results.to_csv(f'{out_path}/best_candidates_{subset_size}_of_{ensembling_size}.csv')
+    return results
+
