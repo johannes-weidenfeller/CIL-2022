@@ -1,12 +1,14 @@
 import tqdm
 import pandas as pd
 import torch
+import json
+import os
 import random
 import numpy as np
 from scipy.special import softmax
 import itertools
 
-from typing import Tuple, Dict
+from typing import Tuple, Dict, Set, List, Callable
 
 import helpers
 
@@ -18,7 +20,7 @@ def shuffle(
 ) -> Tuple[Tuple[str], torch.Tensor]:
     """
     shuffle examples based on seed
-
+    
     :param X: tweets
     :param y: labels
     :param seed: seed for RNG
@@ -60,7 +62,7 @@ def ensemble_via_geometric_mean_odds(
 ) -> np.array:
     """
     predic labels corresponding to softmaxed geometric mean of odds
-
+    
     :param probabilities: a dataframe of predicted probabilities for positive labels
     """
     n = probabilities.shape[1]
@@ -180,80 +182,130 @@ class Ensemble:
 
 def ensembling_candidate_search(
     out_path: str,
-    performance_threshold: float,
-    n_models: int,
-    inference_style: str
-) -> pd.DataFrame:
+    n_models_list: List[int],
+    inference_styles: List[str]
+):
     """
-    tries ensembling all combinations of n_models on all models exceeding performance_threshold
+    tries ensembling all combinations of n models with inference style inference_stlye
+    for each n in n_models_list and each inference_style in inference_styles
 
     :param out_path: path of experiment results, containing test set and probabilities
-    :param performance_threshold: consider only models exceeding this threshold
     :param n_models: number of models per ensemble
     :param inference_style: how to ensemble predictions
     """
     results = pd.read_csv(f'{out_path}/results.csv', index_col=0)
-    candidates = results[results.test_acc > performance_threshold].index.tolist()
     with open(f'{out_path}/X_test.txt', 'r') as f:
         X_test = tuple([f.read().split('\n')])
     y_test = torch.load(f'{out_path}/y_test.pt')
-    candidates = results[results.test_acc > performance_threshold].index.tolist()
+    candidates = results.index.tolist()
     probs = {
         candidate: torch.load(f'{out_path}/probs/{candidate}.pt') for candidate in candidates
     }
-    combinations = list(itertools.combinations(candidates, n_models))
     metrics = ['acc', 'mcc', 'tp', 'tn', 'fp', 'fn', 'auroc', 'auprc']
-    candidate_search_results = pd.DataFrame(
-        index=range(len(combinations)),
-        columns=[f'model {i}' for i in range(1, n_models + 1)] + metrics
-    )
-    for i, combination in tqdm.tqdm(enumerate(combinations), total=len(combinations)):
-        pos_probs = pd.DataFrame(
-            {model_id: probs[model_id].numpy()[:, 1] for model_id in combination}
-        )
-        ensembled_probs = ensemble_probs(pos_probs, inference_style)
-        test_probs = torch.Tensor(np.stack((1 - ensembled_probs, ensembled_probs), axis=1))
-        metrics_res = helpers.calc_metrics(y_test, test_probs)
-        for j in range(n_models):
-            candidate_search_results.loc[i, f'model {j + 1}'] = combination[j]
-        for metric in metrics:
-            candidate_search_results.loc[i, metric] = metrics_res[metric]
-    candidate_search_results.sort_values(by='acc', ascending=False, inplace=True)
-    candidate_search_results.to_csv(f'{out_path}/candidate_search_results-{inference_style}-{n_models}.csv')
-    return candidate_search_results
+    if not os.path.exists(f'{out_path}/candidate_search'):
+        os.makedirs(f'{out_path}/candidate_search')
+    for n_models in n_models_list:
+        if not os.path.exists(f'{out_path}/candidate_search/ensemble_{n_models}'):
+            os.makedirs(f'{out_path}/candidate_search/ensemble_{n_models}')
+        combinations = list(itertools.combinations(candidates, n_models))
+        for inference_style in inference_styles:
+            candidate_search_results = pd.DataFrame(
+                index=range(len(combinations)),
+                columns=[f'model {i}' for i in range(1, n_models + 1)] + metrics
+            )
+            for i, combination in tqdm.tqdm(enumerate(combinations), total=len(combinations)):
+                pos_probs = pd.DataFrame(
+                    {model_id: probs[model_id].numpy()[:, 1] for model_id in combination}
+                )
+                ensembled_probs = ensemble_probs(pos_probs, inference_style)
+                test_probs = torch.Tensor(np.stack((1 - ensembled_probs, ensembled_probs), axis=1))
+                metrics_res = helpers.calc_metrics(y_test, test_probs)
+                for j in range(n_models):
+                    candidate_search_results.loc[i, f'model {j + 1}'] = combination[j]
+                for metric in metrics:
+                    candidate_search_results.loc[i, metric] = metrics_res[metric]
+            candidate_search_results.sort_values(by='acc', ascending=False, inplace=True)
+            path = f'{out_path}/candidate_search/ensemble_{n_models}/{inference_style}.csv'
+            candidate_search_results.to_csv(path)
+    
 
-
-def rank_ensembling_candidates(
-    candidate_search_results: pd.DataFrame,
+def choose_ensembling_components(
+    n_models_list: List[int],
+    inference_styles: List[str],
+    out_path: str,
     pct: float,
-    subset_size: int,
-    out_path: str
 ) -> pd.DataFrame:
     """
-    ranks subsets of models by frequency in top qantile
 
-    :param candidate_search_result: result by ensembling_candidate_search()
     :param pct: indicating which share of best models to consider
-    :param subset_size: number of models to consider together
     :param out_path: where to save results to
     """
-    df = candidate_search_results.sort_values(by='acc', ascending=False)
-    n = df.shape[0]
-    model_cols = [c for c in df.columns if 'model ' in c]
-    ensembling_size = len(model_cols)
-    top_models = df[:int(n * pct)][model_cols]
-    ensembles = set(top_models.to_numpy().flatten())
-    ensemble_subsets = list(itertools.combinations(ensembles, subset_size))
-    ensemble_subsets = [tuple(sorted(ss)) for ss in ensemble_subsets]
-    frequencies = {ensemble_subset: 0 for ensemble_subset in ensemble_subsets}
-    for i, models in top_models.iterrows():
-        for subset in list(itertools.combinations(models.tolist(), subset_size)):
-            frequencies[tuple(sorted(subset))] += 1
-    frequencies = sorted(frequencies.items(), key=lambda t: t[1], reverse=True)
-    best_subsets = [modelnames for modelnames, _ in frequencies]
-    counts = [count for _, count in frequencies]
-    results = pd.DataFrame({'count': counts})
-    results[[f'model {i}' for i in range(1, subset_size + 1)]] = best_subsets
-    results.to_csv(f'{out_path}/best_candidates_{subset_size}_of_{ensembling_size}.csv')
-    return results
+    candidates_search_summary = pd.DataFrame(index=n_models_list, columns=inference_styles)
+    best_ensembles_summary = dict()
+    for n_models in n_models_list:
+        best_ensembles_summary[n_models] = dict()
+        for inference_style in tqdm.tqdm(inference_styles, total=len(inference_styles)):
+            path = f'{out_path}/candidate_search/ensemble_{n_models}/{inference_style}.csv'
+            df = pd.read_csv(path, index_col=0)
+            df.sort_values(by='acc', ascending=True)
+            k = df.shape[0]
+            model_cols = [c for c in df.columns if 'model ' in c]
+            top_models = df[:int(k * pct)][model_cols]
+            ensembles = set(top_models.to_numpy().flatten())
+            ensemble_subsets = list(itertools.combinations(ensembles, n_models - 1))
+            ensemble_subsets = [tuple(sorted(subset)) for subset in ensemble_subsets]
+            frequencies = {subset: 0 for subset in ensemble_subsets}
+            for i, models in top_models.iterrows():
+                subset_occurrences = list(itertools.combinations(models.tolist(), n_models - 1))
+                for subset in subset_occurrences:
+                    frequencies[tuple(sorted(subset))] += 1
+            frequencies = sorted(frequencies.items(), key=lambda t: t[1], reverse=True)
+            best_components = set(frequencies[0][0])
+            last_component_candidates = ensembles - best_components
+            last_component_candidate_scores = {candidate: 0 for candidate in last_component_candidates}
+            subsets = list(itertools.combinations(best_components, n_models - 2))
+            subsets = [set(subset) for subset in subsets]
+            for i, models in top_models.iterrows():
+                models_set = set(models.tolist())
+                for subset in subsets:
+                    if subset < models_set:
+                        for candidate in models_set - best_components:
+                            last_component_candidate_scores[candidate] += 1
+            last_component_candidate_scores = sorted(
+                last_component_candidate_scores.items(), key=lambda t: t[1], reverse=True
+            )
+            best_last_candidate = last_component_candidate_scores[0][0]
+            best_components.add(best_last_candidate)
+            best_components = sorted(list(best_components))
+            idx = df[model_cols].apply(lambda c: set(c.tolist()), axis=1) == set(best_components)
+            best_ensemble_score = df[idx]['acc'].item()
+            best_ensembles_summary[n_models][inference_style] = {
+                'components': best_components, 'accuracy': best_ensemble_score
+            }
+            top_models_score = df[:int(k * pct)]['acc'].mean()
+            candidates_search_summary.loc[n_models, inference_style] = top_models_score
+    candidates_search_summary.to_csv(f'{out_path}/candidate_search_summary.csv')
+    with open(f'{out_path}/best_ensembles_summary.json', 'w') as f:
+        json.dump(best_ensembles_summary, f)
+
+
+def get_ensemble_components(
+    component_candidates: Dict[str, Callable],
+    ensemble_search_path: str
+):
+    """
+    """
+    with open(f'{ensemble_search_path}/best_ensembles_summary.json', 'r') as f:
+        best_ensembles_summary = json.load(f)
+    n = max(best_ensembles_summary.keys())
+    best_acc = 0
+    best_components = []
+    for inference_method, res in best_ensembles_summary[n].items():
+        if res['accuracy'] > best_acc:
+            best_acc = res['accuracy']
+            best_components = res['components']
+    components = {}
+    for component in best_components:
+        components[component] = component_candidates[component]
+    return components
 

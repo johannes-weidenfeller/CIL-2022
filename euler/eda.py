@@ -1,5 +1,7 @@
+import random
 import torch
 import pandas as pd
+import numpy as np
 
 from typing import Tuple, Dict, Any, List, Union, Callable
 
@@ -116,4 +118,5 @@ def run_eda(n=10):
     onechartokens_freq = frequencies_eda(tweets, labels, onechartoken_prop, 'token')
     print(f'\nTop {n} Single-Character Tokens:')
     print(onechartokens_freq[:n])
+
 

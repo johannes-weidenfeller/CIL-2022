@@ -12,7 +12,7 @@ from sklearn.metrics import (
 )
 from scipy.special import softmax
 
-from typing import Tuple, Dict, Any, List, Union
+from typing import Tuple, Dict, Any, List, Union, Callable
 
 from preprocessing import drop_duplicates, vinai_preprocessing
 
@@ -46,13 +46,13 @@ def get_data(
 
     neg_path = f'twitter-datasets/train_neg{suffix}.txt'
     pos_path = f'twitter-datasets/train_pos{suffix}.txt'
-
+    
     with zipfile.ZipFile('twitter-datasets.zip') as zf:
         with io.TextIOWrapper(zf.open(neg_path), encoding='utf-8') as f:
             neg = f.read().split('\n')[:-1][:class_size]
         with io.TextIOWrapper(zf.open(pos_path), encoding='utf-8') as f:
             pos = f.read().split('\n')[:-1][:class_size]
-
+    
     data = list(zip(neg, [-1] * len(neg))) + list(zip(pos, [1] * len(pos)))
     random.Random(seed).shuffle(data)
 
@@ -201,11 +201,12 @@ def run_best(
     test_size: int,
     model_class: Any,
     model_args: Dict[str, Any],
-    out_path: str
+    out_path: str,
+    apply_pre_fit: Callable=None
 ) -> None:
     """
     run best configuration, save results
-
+    
     :param seed: seed for data order
     :param train_size: number of training examples
     :param test_size: number of testing examples
@@ -215,7 +216,7 @@ def run_best(
     """
     if not os.path.exists(out_path):
         os.makedirs(out_path)
-
+    
     # get data, preprocess
     X_train, y_train, X_test, y_test = get_data(seed, train_size, test_size)
     X_train, y_train = drop_duplicates(X_train, y_train)
@@ -236,9 +237,11 @@ def run_best(
     submission = pd.DataFrame([ids, predictions], index=['Id', 'Prediction']).T
     submission.to_csv(f'{out_path}/submission.csv', index=False)
     torch.save(probabilities, f'{out_path}/probabilities.pt')
-
+    
     # evaluate on test set
-    res = evaluate(clf, X_train, y_train, X_test, y_test, False, f'{out_path}/test_probabilities.pt')
+    res = evaluate(
+        clf, X_train, y_train, X_test, y_test, False, f'{out_path}/test_probabilities.pt'
+    )
     res.to_csv(f'{out_path}/test_results.csv')
 
     # save config

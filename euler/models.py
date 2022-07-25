@@ -1,5 +1,6 @@
 import tqdm
 import torch
+import numpy as np
 import pandas as pd
 from scipy.special import softmax
 from sklearn.metrics import accuracy_score
@@ -37,7 +38,7 @@ class BertweetClassifier:
         y: torch.Tensor
     ) -> None:
         train_df = pd.DataFrame({'text': X, 'labels': (y + 1) / 2})
-        self.model.train_model(train_df, acc=accuracy_score)
+        self.model.train_model(train_df=train_df, acc=accuracy_score)
     
     def predict_proba(
         self,
