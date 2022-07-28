@@ -85,7 +85,6 @@ def main(
             component_model_class=config['default_model_class'],
             component_model_config=config['default_model_args'],
             component_candidates=TRIALS_MAPPER['ensembling_candidate_trials'],
-            ensemble_search_path=config['ensembling_candidate_search']['out_path']
         )
         select_final_submission(
             out_path=config['full_ensemble']['out_path']
@@ -93,5 +92,10 @@ def main(
 
 
 if __name__ == '__main__':
-    main(run_baselines=True)
-
+    main(
+        run_exploratory_data_analysis=False,
+        run_baselines=False,
+        run_sensitivity_analysis=False,
+        run_ensembling_candidate_search=False,
+        run_full_ensemble=False
+    )

@@ -13,6 +13,7 @@ from typing import Tuple, Dict, List, Callable, Any
 
 from helpers import get_data, get_holdout, shuffle, calc_metrics, evaluate
 from trials import run_trials
+from models import MODELS_MAPPER
 import preprocessing
 import curriculum
 
@@ -431,7 +432,6 @@ def fit_ensemble_models(
     :param component_candidates: component candidates
     :param ensemble_search_path: path to ensemble search outputs
     """
-
     if os.path.exists(out_path):
         raise AssertionError(
             f'"{out_path}" already exists, choose another path!'
@@ -442,8 +442,8 @@ def fit_ensemble_models(
         data_seed, train_size + proxy_train_size, test_size
     )
 
-    X_train, y_train = X_train[:train_size], y_train[:train_size]
     X_proxy, y_proxy = X_train[train_size:], y_train[train_size:]
+    X_train, y_train = X_train[:train_size], y_train[:train_size]
     X = get_holdout()
 
     if unique_tweets_only:
@@ -464,6 +464,9 @@ def fit_ensemble_models(
         X_train = preprocessing.vinai_preprocessing(X_train)
         X_test = preprocessing.vinai_preprocessing(X_test)
         X = preprocessing.vinai_preprocessing(X)
+
+    proxy_model_class = MODELS_MAPPER[proxy_model_class]
+    component_model_class = MODELS_MAPPER[component_model_class]
 
     ensemble_components = get_ensemble_components(
         component_candidates=component_candidates,
